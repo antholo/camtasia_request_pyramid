@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      metal:use-macro="load: master.pt">
+
+  <div metal:fill-slot="content">
+
+    <h2>Let's check the sessions tool</h2>
+
+    <p><a href="/session_check">Finger's crossed!</a></p>
+
+  </div>
+
+</html>

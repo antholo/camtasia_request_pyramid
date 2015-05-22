@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      metal:use-macro="load: master.pt">
+
+  <div metal:fill-slot="content">
+
+    <h2>Login to continue</h2>
+
+    <p>Please <a href="${auth_url}">login</a> to continue</p>
+
+  </div>
+
+</html>
