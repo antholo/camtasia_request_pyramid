@@ -5,6 +5,7 @@ development.ini
 production.ini
 setup.py
 camtasia_request/__init__.py
+camtasia_request/appconfig.py
 camtasia_request/auth2.py
 camtasia_request/forms.py
 camtasia_request/tests.py
@@ -18,11 +19,14 @@ camtasia_request.egg-info/requires.txt
 camtasia_request.egg-info/top_level.txt
 camtasia_request/static/pyramid-16x16.png
 camtasia_request/static/pyramid.png
+camtasia_request/static/styles.css
 camtasia_request/static/theme.css
 camtasia_request/static/theme.min.css
 camtasia_request/templates/auth.pt
+camtasia_request/templates/confirmation.pt
 camtasia_request/templates/login.pt
 camtasia_request/templates/master.pt
 camtasia_request/templates/mytemplate.pt
+camtasia_request/templates/request.pt
 camtasia_request/templates/session_check.pt
 camtasia_request/templates/test.pt

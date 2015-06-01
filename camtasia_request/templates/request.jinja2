@@ -7,7 +7,7 @@
 	</div>
 	<div>
 		<form role="form" method="post" action="">
-		<!--{{ form.csrf_token }}-->
+		{{ csrf_token }}
 			{% if form.errors %}
 					{% for error in form.errors.values() %}
 					<div class="app_error">{{ error[0] }}</div>

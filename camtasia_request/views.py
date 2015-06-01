@@ -1,15 +1,15 @@
 from pyramid.view import view_config
 from pyramid.httpexceptions import HTTPFound
+from pyramid import threadlocal
+from pyramid_mailer import get_mailer
+from pyramid_mailer.message import Message
 from datetime import date
+from ConfigParser import SafeConfigParser
 import requests
 # local modules
 import auth2 as d2lauth
 import appconfig
 from forms import RequestForm
-
-# MOVE APP ID AND KEY INTO SEPARATE CONFIG FILE
-appContext = d2lauth.fashion_app_context(app_id=appconfig.APP_ID,#'PkThAwhB0a3Xg6R2SjVugg',
-                                         app_key=appconfig.APP_KEY)
 
 # constants for calculating semester code
 BASE_YEAR = 1945
@@ -22,6 +22,12 @@ MAY = 5
 AUG = 8
 DEC = 12
 
+parser = SafeConfigParser()
+parser.read('development.ini')
+
+appContext = d2lauth.fashion_app_context(app_id=parser.get('app:main', 'APP_ID'),
+                                         app_key=parser.get('app:main', 'APP_KEY'))
+
 
 @view_config(route_name='logout')
 def logout(request):
@@ -29,69 +35,71 @@ def logout(request):
     Dumps session data
     '''
     request.session.invalidate()
-    return HTTPFound(location=appconfig.REDIRECT_AFTER_LOGOUT)
+    return HTTPFound(location=request.registry.settings['REDIRECT_AFTER_LOGOUT'])
 
 #@view_config(route_name='login', renderer='templates/login.pt')
 @view_config(route_name='login', renderer='templates/login.jinja2')
 def login(request):
+    csrf_token = request.session.get_csrf_token()
+    print("TYPE", type(csrf_token))
+    auth_callback = '{0}://{1}:{2}{3}'.format(
+        request.registry.settings['SCHEME'],
+        request.registry.settings['HOST'],
+        request.registry.settings['PORT'],
+        request.registry.settings['AUTH_ROUTE']
+        )
+
     auth_url = appContext.create_url_for_authentication(
-            host=appconfig.LMS_HOST, 
-            client_app_url=appconfig.AUTH_CB,
-            encrypt_request=appconfig.ENCRYPT_REQUESTS)
-    #try:
-    #    request.session['error']
-    #except KeyError:
-    #    request.session['error'] = []
+            host=request.registry.settings['LMS_HOST'], 
+            client_app_url=auth_callback,
+            encrypt_request=request.registry.settings['ENCRYPT_REQUESTS'])
     print request.scheme # CHECKING FOR HTTPS
-    return {'auth_url': auth_url}
+    print csrf_token
+    print auth_url
+    return {'auth_url': auth_url, 'csrf_token': str(csrf_token)}
 
-'''
-@view_config(route_name='auth', renderer='templates/test.pt')
-def auth(request):
-    # beta uc
-    
-    uc = appContext.create_user_context(
-        result_uri=request.url, 
-        host='uwosh-beta.courses.wisconsin.edu',
-        encrypt_requests=True)
-
-    r = requests.get(uc.create_authenticated_url(
-        '/d2l/api/lp/1.4/users/whoami'))
-    request.session['first_name'] = r.json()['FirstName']
-    return {}
-
-
-@view_config(route_name='session_check', renderer='templates/session_check.pt')
-def session_check(request):
-    first_name = request.session['first_name']
-    return {'first_name': first_name}
-'''
 
 #@view_config(route_name='request', renderer='templates/request.pt')
 @view_config(route_name='request', renderer='templates/request.jinja2')
 def request_form(request):
-
     session = request.session
-    if 'url_for_uc' not in session:
-        session['url_for_uc'] = request.url
-    print session
+    csrf_token = session.get_csrf_token()
+    print("CSRF", csrf_token)
 
-    uc = appContext.create_user_context(
-        result_uri=session['url_for_uc'], 
-        host=appconfig.LMS_HOST,
-        encrypt_requests=appconfig.ENCRYPT_REQUESTS)
+    if 'uc' in session:
+        print("looping if")
+        uc = session['uc']
+    else:
+        print("looping else")
+        try:
+            session['uc'] = uc = appContext.create_user_context(
+                result_uri=request.url, 
+                host=request.registry.settings['LMS_HOST'],
+                encrypt_requests=request.registry.settings['ENCRYPT_REQUESTS'])
+        except KeyError:
+            session.flash('Please login.')
+            return HTTPFound(location=request.route_url('login'))
 
-    user_data = get_user_data(uc)
+    user_data = get_user_data(uc, request)
     store_user_data(session, user_data)
     code = get_semester_code()
 
-    session['course_list'] = get_courses(uc, code)
+    session['course_list'] = get_courses(uc, code, request)
     form = RequestForm(request.POST)
     form.course.choices = get_course_choices(session['course_list'])
+
+    if form.course.choices == []:
+        session.flash('No courses were found in D2L for this semester. \
+            Please <a href="http://www.uwosh.edu/d2lfaq/d2l-login">log into \
+            D2L</a> to confirm you have classes in D2L.')
+
+        return {'form': form, 'csrf_token': csrf_token}
 
     print request.scheme #CHECKING FOR HTTPS
 
     if request.method == 'POST' and form.validate():
+        process_form(form, session)
+        '''
         embed = 'no'
         if form.embed.data:
             embed = 'yes'
@@ -116,6 +124,7 @@ def request_form(request):
             'comments' : form.comments.data,
             'expiration' : form.expiration.data
             }
+        '''
 
         return HTTPFound(location=request.route_url('confirmation'))
     else:
@@ -125,11 +134,44 @@ def request_form(request):
 #@view_config(route_name='confirmation', renderer='templates/confirmation.pt')
 @view_config(route_name='confirmation', renderer='templates/confirmation.jinja2')
 def confirmation_page(request):
+
     form = RequestForm()
     session = request.session
+    csrf_token = session.get_csrf_token()
+    
+    if 'uc' not in session:
+        session.flash('Please login to place request')
+        return HTTPFound(location=request.route_url('login'))
+
+    submitter_email = session['uniqueName'] + '@' + \
+        request.registry.settings['EMAIL_DOMAIN']
+    name = session['firstName'] + ' ' + session['lastName']
+    sender = request.registry.settings['mail.username']
+
+    # remove for production
+    submitter_email = 'lookerb@uwosh.edu'
+
+    message = Message(subject="Relay account setup",
+        sender=sender,
+        recipients=[sender,submitter_email])
+
+    message.body = make_msg_html(name,
+        submitter_email,
+        session['requestDetails'],
+        form)
+
+    message.html = make_msg_html(name,
+        submitter_email,
+        session['requestDetails'],
+        form)
+    
+    mailer = get_mailer(request)
+    mailer.send_immediately(message, fail_silently=False)
+    
     print request.scheme #CHECKING FOR HTTPS
     return {
-        'name': session['firstName'] + " " + session['lastName'],
+        'csrf_token': csrf_token,
+        'name': name,
         'form': form,
         'requestDetails': session['requestDetails']
         }
@@ -138,13 +180,13 @@ def confirmation_page(request):
 # helpers #
 ###########
 
-def get_user_data(uc):
+def get_user_data(uc, request):
     '''
     Requests current user info from D2L via whoami route
     http://docs.valence.desire2learn.com/res/user.html#get--d2l-api-lp-%28version%29-users-whoami
     '''
     my_url = uc.create_authenticated_url(
-        '/d2l/api/lp/{0}/users/whoami'.format(appconfig.VER))
+        '/d2l/api/lp/{0}/users/whoami'.format(request.registry.settings['VER']))
     return requests.get(my_url).json()
 
 
@@ -182,15 +224,15 @@ def get_semester_code():
     return code
 
 
-def get_courses(uc, semester_code):
+def get_courses(uc, semester_code, request):
     '''
     Creates dictionary of lists of courses keyed by semester code and stores
     it in session for easy access post-creation.
     '''
     my_url = uc.create_authenticated_url(
-        '/d2l/api/lp/{0}/enrollments/myenrollments/'.format(appconfig.VER))
+        '/d2l/api/lp/{0}/enrollments/myenrollments/'.format(request.registry.settings['VER']))
     kwargs = {'params': {}}
-    kwargs['params'].update({'orgUnitTypeId': appconfig.ORG_UNIT_TYPE_ID})
+    kwargs['params'].update({'orgUnitTypeId': request.registry.settings['ORG_UNIT_TYPE_ID']})
     r = requests.get(my_url, **kwargs)
     course_list = []
     end = False
@@ -231,3 +273,76 @@ def parse_code(code):
     parsed = code.split("_")
     return parsed[3] + " " + parsed[4] + " " + parsed[5]
 
+
+def process_form(form, session):
+    embed = 'no'
+    if form.embed.data:
+        embed = 'yes'
+    download = 'no'
+    if form.download.data:
+        download = 'yes'
+    share = 'no'
+    if form.share.data:
+        share = 'yes'
+    training = 'no'
+    if form.training.data:
+        training = 'yes'
+            
+    session['requestDetails'] = {
+        'courseId' : str(form.course.data),
+        'embed' : embed,
+        'download' : download,
+        'share' : share,
+        'training' : training,
+        'location' : form.location.data,
+        'courseName' : form.courseName.data,
+        'comments' : form.comments.data,
+        'expiration' : form.expiration.data
+        }
+
+
+def make_msg_text(name, submitter_email, requestDetails, form):
+    email = 'Your E-Mail Address\n\t{0}\n'.format(submitter_email)
+    name =  'Name\n\t{0}\n'.format(name)
+    embed = '{0}\n\t{1}\n'.format(form.embed.label, requestDetails['embed'])
+    download = '{0}\n\t{1}\n'.format(form.download.label,
+        requestDetails['download'])
+    share = '{0}\n\t{1}\n'.format(form.share.label, requestDetails['share'])
+    ouNumber = 'OU Number\n\t{0}\n'.format(requestDetails['courseId'])
+    location = '{0}\n\t{1}'.format(form.location.label,
+        requestDetails['location'])
+    courseName = '{0}\n\t{1}\n'.format(form.courseName.label,
+        requestDetails['courseName'])
+    expiration = '{0}\n\t{1}\n'.format(form.expiration.label,
+        requestDetails['expiration'])
+    training = '{0}\n\t{1}\n'.format(form.training.label,
+        requestDetails['training'])
+    comments = '{0}\n\t{1}\n'.format(form.comments.label,
+        requestDetails['comments'])
+    return email + name + embed + download + share + ouNumber + location + \
+        courseName + expiration + training + comments
+
+
+def make_msg_html(name, submitter_email, requestDetails, form):
+    email = '<dl><dt>Your E-Mail Address</dt><dd><a href=3D"mailto:{0}' + \
+         ' target=3D"_blank">{0}</a></dd>'.format(submitter_email)
+    name = '<dt>Name</dt><dd>{0}</dd>'.format(name)
+    embed = '<dt>{0}</dt><dd>{1}</dd>'.format(form.embed.label,
+        requestDetails['embed'])
+    download = '<dt>{0}</dt><dd>{1}</dd>'.format(form.download.label,
+        requestDetails['download'])
+    share = '<dt>{0}<dt><dd>{1}</dd>'.format(form.share.label,
+        requestDetails['share'])
+    ouNumber = '<dt>OU Number</dt><dd>{0}</dd>'.format(requestDetails['courseId'])
+    location = '<dt>{0}</dt><dd>{1}</dd>'.format(form.location.label,
+        requestDetails['location'])
+    courseName = '<dt>{0}</dt><dd>{1}</dd>'.format(form.courseName.label,
+        requestDetails['courseName'])
+    expiration = '<dt>{0}</dt><dd>{1}</dd>'.format(form.expiration.label,
+        requestDetails['expiration'])
+    training = '<dt>{0}</dt><dd>{1}</dd>'.format(form.training.label,
+        requestDetails['training'])
+    comments = '<dt>{0}</dt><dd>{1}</dd></dl>'.format(form.comments.label,
+        requestDetails['comments'])
+    return email + name + embed + download + share + ouNumber + location + \
+        courseName + expiration + training + comments

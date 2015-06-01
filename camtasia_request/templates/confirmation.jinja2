@@ -1,10 +1,10 @@
 {% extends "template.jinja2" %}
 {% block content %}
     <h2>Thank You</h2>
-    <p>{{ name }}, please review your submission below. Contact ??? with any corrections.</p>
+    <p>{{ name }}, please review your submission below. Contact <a href="mailto:bannenbl@uwosh.edu">Liz Bannenberg</a> with any corrections.</p>
     <p>After reviewing, you can submit another <a href="/request">camtasia setup request</a> or <a href="/logout">logout</a>.</p>
     <form method="post" action="/">
-    <!--{{ form.csrf_token }}-->
+    {{ csrf_token }}
         <dl>
             <dt>{{ form.embed.label }}</dt>
                 <dd>{{ requestDetails['embed'] }}</dd>

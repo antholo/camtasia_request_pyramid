@@ -7,18 +7,18 @@ def main(global_config, **settings):
     """
     session_factory = SignedCookieSessionFactory(
         urandom(64),
-        secure=True, #CURRENTLY CAUSING KEY ERROR ACCESSING SESSION VALUE
+        secure=False, #CURRENTLY CAUSING KEY ERROR ACCESSING SESSION VALUE WHEN TRUE 
+        # Need to determine how to use https on campus server
         httponly=True
         )
 
     config = Configurator(
         session_factory=session_factory,
         settings=settings)
-    config.include('pyramid_chameleon')
-    config.include('pyramid_deform')
+    #config.include('pyramid_chameleon')
+    #config.include('pyramid_deform')
     config.include('pyramid_jinja2')
-    #config.include('pyramid_wtforms')
-    #config.include('pyramid_redis_sessions')
+    config.include('pyramid_mailer')
     config.add_static_view('static', 'static', cache_max_age=3600)
     config.add_route('home', '/')
     config.add_route('logout', '/logout')
